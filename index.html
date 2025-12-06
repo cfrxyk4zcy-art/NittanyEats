@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>NittanyEats – Live PSU Menus with Nutrition & CO₂e</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 20px;
+      background: #f7f9fc;
+    }
+    h1 {
+      margin-bottom: 0.25rem;
+    }
+    small {
+      color: #555;
+    }
+    .controls {
+      margin: 20px 0;
+      padding: 15px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 20px;
+      align-items: flex-end;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+    }
+    label {
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+    select, input[type="date"] {
+      padding: 6px 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      min-width: 180px;
+      font-size: 14px;
+    }
+    button {
+      padding: 8px 14px;
+      border-radius: 4px;
+      border: none;
+      background: #0066cc;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #00aa88;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #444;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    th, td {
+      padding: 8px 10px;
+      font-size: 13px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+    }
+    th {
+      background: #f0f3fa;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background: #fafbff;
+    }
+    .center {
+      text-align: center;
+    }
+    .tag {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: white;
+      display: inline-block;
+    }
+    .tag.green { background: #2e8b57; }
+    .tag.yellow { background: #e0a800; }
+    .tag.red { background: #d9534f; }
+  </style>
+</head>
+<body>
+
+<h1>NittanyEats – Live PSU Menus</h1>
+<small>Live dining hall menu with nutrition &amp; CO₂e per serving from absecom.psu.edu</small>
+
+<div class="controls">
+  <div class="field">
+    <label for="hall">Dining Hall (Location)</label>
+    <select id="hall">
+      <!-- IDs must match backend HALLS mapping -->
+      <option value="11">UP: East Food District @ Findlay</option>
+      <option value="17">UP: North Food District @ Warnock</option>
+      <option value="14">UP: Pollock Dining Commons</option>
+      <option value="13">UP: South Food District @ Redifer</option>
+      <option value="16">UP: West Food District @ Waring</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="meal">Meal</label>
+    <select id="meal">
+      <option>Breakfast</option>
+      <option selected>Lunch</option>
+      <option>Dinner</option>
+      <option>Late Night</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="datePicker">Date</label>
+    <input type="date" id="datePicker" />
+  </div>
+
+  <div class="field">
+    <button id="btnMenu" onclick="loadMenu(false)">View Menu</button>
+  </div>
+
+  <div class="field">
+    <button id="btnReco" class="secondary" onclick="loadMenu(true)">
+      View Sustainable Recommendations
+    </button>
+  </div>
+
+  <div class="field" style="flex:1 1 auto; min-width: 220px;">
+    <div id="status"></div>
+  </div>
+</div>
+
+<table id="resultsTable" style="display:none;">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Category</th>
+      <th>Item</th>
+      <th>Calories</th>
+      <th>Protein (g)</th>
+      <th>Carbs (g)</th>
+      <th>Sodium (mg)</th>
+      <th>CO₂e (kg/serving)</th>
+      <th>Sustainability</th>
+    </tr>
+  </thead>
+  <tbody id="resultsBody"></tbody>
+</table>
+
+<script>
+const BACKEND_BASE = "http://127.0.0.1:8000";
+
+function setToday() {
+  const input = document.getElementById("datePicker");
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  input.value = `${yyyy}-${mm}-${dd}`;
+}
+
+function toPsuDateString(dateInputValue) {
+  // from "YYYY-MM-DD" -> "M/D/YY" (no leading zeros)
+  const [yyyy, mm, dd] = dateInputValue.split("-");
+  const month = String(parseInt(mm, 10));
+  const day = String(parseInt(dd, 10));
+  const yy = yyyy.slice(2);
+  return `${month}/${day}/${yy}`;
+}
+
+function co2eTagClass(val) {
+  if (val === null || val === undefined) return "";
+  if (val <= 1.5) return "green";
+  if (val <= 3.5) return "yellow";
+  return "red";
+}
+
+async function loadMenu(recommendations) {
+  const hall = document.getElementById("hall").value;
+  const meal = document.getElementById("meal").value;
+  const dateVal = document.getElementById("datePicker").value;
+  const status = document.getElementById("status");
+  const btnMenu = document.getElementById("btnMenu");
+  const btnReco = document.getElementById("btnReco");
+
+  if (!dateVal) {
+    alert("Pick a date first.");
+    return;
+  }
+
+  const psuDate = toPsuDateString(dateVal);
+  const endpoint = recommendations ? "/recommendations" : "/menus";
+  const url = `${BACKEND_BASE}${endpoint}?campus_id=${encodeURIComponent(hall)}&meal=${encodeURIComponent(meal)}&date=${encodeURIComponent(psuDate)}`;
+
+  status.textContent = "Loading from backend…";
+  btnMenu.disabled = true;
+  btnReco.disabled = true;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    renderResults(data);
+    const mode = recommendations ? "sorted by sustainability score" : "in menu order";
+    status.textContent = `Loaded ${data.items.length} items for ${data.hall_name} – ${data.meal_period} on ${data.date} (${mode}).`;
+  } catch (err) {
+    console.error(err);
+    status.textContent = "Error loading data: " + err;
+    document.getElementById("resultsTable").style.display = "none";
+  } finally {
+    btnMenu.disabled = false;
+    btnReco.disabled = false;
+  }
+}
+
+function renderResults(data) {
+  const table = document.getElementById("resultsTable");
+  const tbody = document.getElementById("resultsBody");
+  tbody.innerHTML = "";
+
+  if (!data.items || data.items.length === 0) {
+    table.style.display = "none";
+    return;
+  }
+
+  data.items.forEach((item, idx) => {
+    const tr = document.createElement("tr");
+
+    const nCell = document.createElement("td");
+    nCell.textContent = idx + 1;
+    nCell.className = "center";
+    tr.appendChild(nCell);
+
+    const catCell = document.createElement("td");
+    catCell.textContent = item.category || "";
+    tr.appendChild(catCell);
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = item.name || "";
+    tr.appendChild(nameCell);
+
+    const nut = item.nutrition || {};
+
+    const calCell = document.createElement("td");
+    calCell.textContent = nut.calories != null ? nut.calories : "";
+    calCell.className = "center";
+    tr.appendChild(calCell);
+
+    const protCell = document.createElement("td");
+    protCell.textContent = nut.protein_g != null ? nut.protein_g : "";
+    protCell.className = "center";
+    tr.appendChild(protCell);
+
+    const carbCell = document.createElement("td");
+    carbCell.textContent = nut.carbs_g != null ? nut.carbs_g : "";
+    carbCell.className = "center";
+    tr.appendChild(carbCell);
+
+    const sodCell = document.createElement("td");
+    sodCell.textContent = nut.sodium_mg != null ? nut.sodium_mg : "";
+    sodCell.className = "center";
+    tr.appendChild(sodCell);
+
+    const co2Cell = document.createElement("td");
+    if (item.co2e_per_serving != null) {
+      const span = document.createElement("span");
+      span.className = "tag " + co2eTagClass(item.co2e_per_serving);
+      span.textContent = item.co2e_per_serving.toFixed(2);
+      co2Cell.appendChild(span);
+    }
+    co2Cell.className = "center";
+    tr.appendChild(co2Cell);
+
+    const scoreCell = document.createElement("td");
+    if (item.sustainability_score != null) {
+      scoreCell.textContent = item.sustainability_score.toFixed(0) + " / 100";
+    }
+    scoreCell.className = "center";
+    tr.appendChild(scoreCell);
+
+    tbody.appendChild(tr);
+  });
+
+  table.style.display = "table";
+}
+
+// init
+setToday();
+</script>
+
+</body>
+</html>
